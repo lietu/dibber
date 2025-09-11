@@ -31,7 +31,7 @@ and then on your pipeline agent run in the checkout:
 
 ```
 pip install dibber
-dibber build_multiplatform
+dibber build-multiplatform
 dibber upload
 dibber scan
 ```
