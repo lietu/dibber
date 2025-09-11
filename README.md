@@ -92,7 +92,7 @@ That's why there are 2 options to build images:
   suitable for local development of the images
 - `dibber build-multiplatform` builds all images using `docker buildx build` for linux/amd64 and linux/arm64.
   It requires extra setup (check
-  [pipeline code](https://github.com/lietu/dibber-template/tree/main/.github/workflows/build-and-upload.yaml))
+  [pipeline code](https://github.com/lietu/docker-images-template/tree/main/.github/workflows/build-and-upload.yaml))
   and is not recommended for local development
 
 ## Contributions
