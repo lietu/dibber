@@ -8,8 +8,8 @@ from loguru import logger
 from pydantic import BaseModel
 from yaml import load
 
+from dibber.settings import conf
 from dibber.utils import run
-from settings import conf
 
 try:
     from yaml import CLoader as Loader

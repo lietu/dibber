@@ -19,8 +19,8 @@ from dibber.images import (
     update_scanner,
     upload_tags_from_local_registry,
 )
+from dibber.settings import conf
 from dibber.validation import validate
-from settings import conf
 
 
 class Platform(str, Enum):
