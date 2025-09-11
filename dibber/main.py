@@ -108,7 +108,7 @@ def _build_all_images(
 
 @click.group(help="Manage docker images")
 def cli():
-    print("foo")
+    pass
 
 
 @cli.command(help="Build docker images")

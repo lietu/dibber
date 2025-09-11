@@ -12,7 +12,8 @@ Usage examples:
 
 If you want to use it with GitHub it takes just a few steps:
 
-1. Create a new repository based on the [template repository](https://github.com/lietu/dibber-template).
+1. Create a new repository based on the
+   [template repository](https://github.com/lietu/docker-images-template).
 
 2. Fill in `dibber.toml`: Basically you need to set up your GitHub username prefixed by the `ghcr.io` for them
    to land in GitHub packages
