@@ -1,0 +1,30 @@
+[project]
+name = "dibber"
+version = "1.0.0"
+description = "Dibber - Docker image manager"
+authors = [{name = "Janne Enberg", email = "janne.enberg@lietu.net"}]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.2.1",
+    "humanize>=4.13.0",
+    "loguru>=0.7.3",
+    "pydantic>=2.11.7",
+    "pydantic-settings>=2.10.1",
+    "pytest>=8.4.2",
+    "pyyaml>=6.0.2",
+    "typer>=0.17.4",
+]
+license = "BSD"
+packages = [{ include = "dibber", from = "." }]
+
+[project.scripts]
+dibber = "dibber:cli"
+
+[tool.skjold]
+report_only = false
+sources = ["pyup", "gemnasium"]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
