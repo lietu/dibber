@@ -25,7 +25,7 @@ def find_images() -> Dict[str, List[str]]:
     result = {}
 
     images = [
-        p.name for p in Path("").iterdir() if p.is_dir() and not p.name.startswith(".")
+        p.name for p in Path(".").iterdir() if p.is_dir() and not p.name.startswith(".")
     ]
 
     for image in images:
