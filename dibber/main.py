@@ -79,7 +79,7 @@ def _build_all_images(
 
         original_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         with Pool(
-            parallel, initializer=init_pool, initargs=(utils.logger, os.environ)
+            parallel, initializer=init_pool, initargs=(utils.logger, os.environ.copy())
         ) as pool:
             signal.signal(signal.SIGINT, original_sigint_handler)
 
