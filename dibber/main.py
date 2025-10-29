@@ -2,10 +2,8 @@ import multiprocessing.context
 import os
 import signal
 import sys
-from enum import Enum
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -23,23 +21,15 @@ from dibber.settings import conf
 from dibber.validation import validate
 
 
-class Platform(str, Enum):
-    LINUX_AMD64 = "linux/amd64"
-    LINUX_ARM64 = "linux/arm64"
-
-
-ALL_PLATFORMS = [Platform.LINUX_AMD64.value, Platform.LINUX_ARM64.value]
-
-
 def init_pool(logger_, env):
     utils.logger = logger_
     os.environ.update(env)
 
 
-def _build_images(pool, images, platform, contexts):
+def _build_images(pool, images, contexts):
     res = pool.starmap_async(
         build_and_upload_image,
-        [(image, version, platform, contexts) for image, version in images],
+        [(image, version, contexts) for image, version in images],
     )
 
     while True:
@@ -65,8 +55,7 @@ def read_manifest_information():
     return manifest_data.read_text().splitlines()
 
 
-def _build_all_images(parallel: int, platform: Optional[Platform] = None):
-    platform = platform.value if platform else None
+def _build_all_images(parallel: int):
     images = find_images()
     validate(images)
     sorted_images = sort_images(images)
@@ -75,7 +64,7 @@ def _build_all_images(parallel: int, platform: Optional[Platform] = None):
     if parallel == 1:
         images = [img_conf.image for img_conf in sorted_images]
         for image, version in images:
-            new_contexts = build_and_upload_image(image, version, platform, contexts)
+            new_contexts = build_and_upload_image(image, version, contexts)
             contexts += new_contexts
     else:
         utils.logger.info(f"Building {len(sorted_images)} images in {parallel} threads")
@@ -102,7 +91,7 @@ def _build_all_images(parallel: int, platform: Optional[Platform] = None):
                         prio=prio,
                         parallel=parallel,
                     )
-                    new_contexts = _build_images(pool, images, platform, contexts)
+                    new_contexts = _build_images(pool, images, contexts)
                     contexts += new_contexts
                 except KeyboardInterrupt:
                     utils.logger.error("Caught KeyboardInterrupt, terminating workers")
@@ -128,14 +117,8 @@ def cli():
     help="Number of parallel images to build.",
     show_default=True,
 )
-@click.option(
-    "--platform",
-    default=None,
-    type=Platform,
-    help="Platform to build for.",
-)
-def build(parallel: int, platform: Optional[Platform]):
-    _build_all_images(parallel, platform=platform)
+def build(parallel: int):
+    _build_all_images(parallel)
 
 
 @cli.command(help="Combine manifests to a multi-arch image")

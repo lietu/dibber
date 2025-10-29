@@ -3,7 +3,7 @@ import time
 from datetime import datetime, timedelta
 from os.path import basename
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import humanize
 from loguru import logger
@@ -157,14 +157,11 @@ def create_manifest(image: str, digests: list[str]):
     )
 
 
-def build_and_upload_image(
-    image: str, version: str, platform: Optional[str] = None, contexts: list[str] = []
-) -> str:
+def build_and_upload_image(image: str, version: str, contexts: list[str] = []) -> str:
     """
     Build and upload image
     :param image:
     :param version:
-    :param platform:
     :return: ["ghcr.io/user/image:docker_tag sha256:9df972...", ...]
     """
     start = time.perf_counter()
@@ -185,9 +182,6 @@ def build_and_upload_image(
     cmd += ["-t", f"{image}:{uniq_id}"]
     cmd += build_contexts
 
-    if platform:
-        cmd += ["--platform", platform]
-
     cmd += ["--output", "type=docker"]
     cmd += ["--progress=plain"]
 
@@ -200,9 +194,6 @@ def build_and_upload_image(
     cmd = ["docker", "buildx", "build", name]
     cmd += ["-t", repo]
     cmd += build_contexts
-
-    if platform:
-        cmd += ["--platform", platform]
 
     cmd += ["--progress=plain"]
     cmd += ["--provenance=false"]
