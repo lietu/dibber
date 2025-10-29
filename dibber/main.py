@@ -47,7 +47,7 @@ def _build_images(pool, images, contexts):
 
 def write_manifest_information(contexts):
     manifest_data = Path(".") / "manifest_data.txt"
-    manifest_data.write_text("\n".join(contexts))
+    manifest_data.write_text("\n".join(contexts) + "\n")
 
 
 def read_manifest_information():
