@@ -17,6 +17,7 @@ from dibber.images import (
     scan_image,
     sort_images,
     update_scanner,
+    upload_tags,
     upload_tags_from_local_registry,
 )
 from dibber.settings import conf
@@ -144,10 +145,50 @@ def build_multiplatform(
 
 
 @cli.command(help="Upload docker tags")
-def upload():
+@click.option(
+    "--parallel",
+    default=2,
+    type=int,
+    help="Number of parallel uploads.",
+    show_default=True,
+)
+def upload(parallel: int):
     images = find_images()
     validate(images)
-    upload_tags_from_local_registry(images)
+
+    print(conf.local_registry)
+
+    if conf.local_registry:
+        upload_tags_from_local_registry(images)
+    else:
+        utils.logger.info(f"Uploading {len(images)} images in {parallel} threads")
+        utils.logger.remove()
+        utils.logger.add(sys.stderr, enqueue=True, level="INFO")
+
+        original_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        with Pool(
+            parallel, initializer=init_pool, initargs=(utils.logger, os.environ.copy())
+        ) as pool:
+            signal.signal(signal.SIGINT, original_sigint_handler)
+
+            image_versions = []
+            for image, versions in images.items():
+                for version in versions:
+                    image_versions.append((image, version))
+
+            verbose = False
+            res = pool.starmap_async(
+                upload_tags,
+                [(image, version, verbose) for image, version in image_versions],
+            )
+
+            while True:
+                try:
+                    # Have a timeout to be non-blocking for signals
+                    res.get(3)
+                    break
+                except multiprocessing.context.TimeoutError:
+                    pass
 
 
 @cli.command(help="Scan docker images")

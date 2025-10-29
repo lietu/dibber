@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -13,7 +15,7 @@ class Settings(BaseSettings):
     # User or organization name, used for "user/image" -name generation, optionally leading registry hostname
     docker_user: str
 
-    local_registry: str = ""
+    local_registry: Optional[str] = None
 
     # List of images that should be built beforehand
     priority_builds: PriorityBuilds = []
