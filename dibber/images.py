@@ -1,5 +1,7 @@
+import os
 import time
 from datetime import datetime, timedelta
+from os.path import basename
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -9,7 +11,7 @@ from pydantic import BaseModel
 from yaml import load
 
 from dibber.settings import conf
-from dibber.utils import run
+from dibber.utils import make_id, run, write_log
 
 try:
     from yaml import CLoader as Loader
@@ -111,68 +113,142 @@ def sort_images(images_: Dict[str, List[str]]) -> List[ImageConf]:
     return result
 
 
-def build_image(image: str, version: str, verbose=True, platform: Optional[str] = None):
+def add_image_tag(image, uniq_id, tag):
+    tag_cmd = ["docker", "tag", f"{image}:{uniq_id}", f"{image}:{tag}"]
+    run(tag_cmd)
+
+
+def remove_image_uniq_id(image, uniq_id):
+    untag_cmd = ["docker", "rmi", f"{image}:{uniq_id}"]
+    run(untag_cmd)
+
+
+def get_build_contexts(contexts):
+    build_contexts = []
+
+    for context in contexts:
+        image, sha256 = context.split(" ", maxsplit=1)
+        base_image = basename(image)
+        build_contexts += [
+            "--build-context",
+            f"{base_image}=docker-image://{image}@{sha256}",
+        ]
+
+    return build_contexts
+
+
+def create_manifest(image: str, digests: list[str]):
+    start = time.perf_counter()
+    base_image = image.split(":", maxsplit=1)[0]
+
+    cmd = ["docker", "manifest", "create", image]
+    for digest in digests:
+        cmd += ["--amend", f"{base_image}@{digest}"]
+    run(cmd)
+
+    cmd = ["docker", "manifest", "push", image]
+    run(cmd)
+
+    elapsed = time.perf_counter() - start
+    logger.info(
+        "Merged manifest for {image} in {elapsed}",
+        image=image,
+        elapsed=humanize.precisedelta(timedelta(seconds=elapsed)),
+    )
+
+
+def build_and_upload_image(
+    image: str, version: str, platform: Optional[str] = None, contexts: list[str] = []
+) -> str:
+    """
+    Build and upload image
+    :param image:
+    :param version:
+    :param platform:
+    :return: ["ghcr.io/user/image:docker_tag sha256:9df972...", ...]
+    """
+    start = time.perf_counter()
+
+    # Need a temporary ID due to limitations of buildx
+    uniq_id = make_id()
+
     config = get_config(image, version)
     name = f"{image}/{version}"
+    repo = docker_image(image)
     tag = docker_tag(image, version)
+    build_contexts = get_build_contexts(contexts)
 
     logger.info("Building {name}", name=name)
 
-    # Full commandline with all tags in one
-    cmd = ["docker", "build", name, "-t", tag]
-    for tag in config.tags:
-        full_name = docker_tag(image, tag)
-        cmd += ["-t", full_name]
-
-    # make it possible to reuse this image in other local builds
-    cmd += ["-t", docker_tag(image, tag=version, local=True)]
+    # First build local image
+    cmd = ["docker", "buildx", "build", name]
+    cmd += ["-t", f"{image}:{uniq_id}"]
+    cmd += build_contexts
 
     if platform:
         cmd += ["--platform", platform]
 
-    start = time.perf_counter()
-    run(cmd, verbose=verbose)
-    end = time.perf_counter()
-    if not verbose:
-        logger.info(
-            "Built {name} in {elapsed}",
-            name=name,
-            elapsed=humanize.precisedelta(timedelta(seconds=end - start)),
-        )
+    cmd += ["--output", "type=docker"]
+    cmd += ["--progress=plain"]
 
+    full_cmd = " ".join(cmd)
+    output = full_cmd + os.linesep
+    output += run(cmd)
+    output += os.linesep + os.linesep
 
-def build_image_multiplatform(
-    image: str, version: str, platforms: List[str], verbose=True
-):
-    name = f"{image}/{version}"
+    # Then push to registry, should be built already
+    cmd = ["docker", "buildx", "build", name]
+    cmd += ["-t", repo]
+    cmd += build_contexts
 
-    logger.info("Building {name}", name=name)
+    if platform:
+        cmd += ["--platform", platform]
 
-    localhost_tag = f"{conf.local_registry}/{image}:{version}"
-    build_cmd = [
-        "docker",
-        "buildx",
-        "build",
-        "--platform",
-        ",".join(platforms),
-        name,
-        "-t",
-        localhost_tag,
-        "--build-arg",
-        f"LOCAL_REGISTRY={conf.local_registry}/",
-        "--network=host",
-        "--push",  # push to localhost registry
-    ]
+    cmd += ["--progress=plain"]
+    cmd += ["--provenance=false"]
+    cmd += ["--output", "push-by-digest=true,type=image,push=true"]
 
-    start = time.perf_counter()
-    run(build_cmd, verbose=verbose)
-    end = time.perf_counter()
-    if not verbose:
-        logger.info(
-            "Built {name} in {elapsed}",
-            name=name,
-            elapsed=humanize.precisedelta(timedelta(seconds=end - start)),
-        )
+    full_cmd = " ".join(cmd)
+    output += full_cmd + os.linesep
+    output += run(cmd)
+
+    write_log(tag, output)
+
+    # Find the sha256 tag for the image
+    sha256 = ""
+    for line in output.splitlines():
+        if " exporting manifest " in line:
+            for word in line.split(" "):
+                if word.startswith("sha256:"):
+                    sha256 = word.strip()
+                    break
+        if sha256 != "":
+            break
+
+    if sha256 == "":
+        logger.error(output)
+        raise Exception("Couldn't find sha256 tag in output")
+
+    # Create tag map and additional local tags
+    tag_map = [f"{tag} {sha256}"]
+    add_image_tag(image, uniq_id, version)
+    for extra_tag in config.tags:
+        full_name = docker_tag(image, extra_tag)
+        tag_map += [f"{full_name} {sha256}"]
+
+        add_image_tag(image, uniq_id, extra_tag)
+
+    # Remove the now unnecessary unique ID
+    remove_image_uniq_id(image, uniq_id)
+
+    elapsed = time.perf_counter() - start
+    logger.info(
+        "Built and uploaded {name} in {elapsed}",
+        name=name,
+        elapsed=humanize.precisedelta(timedelta(seconds=elapsed)),
+    )
+
+    return tag_map
 
 
 def upload_tags(image: str, version: str, verbose=True):
@@ -190,19 +266,6 @@ def upload_tags(image: str, version: str, verbose=True):
             name=name,
             elapsed=humanize.precisedelta(end - start),
         )
-
-
-def upload_tags_from_local_registry(images: Dict[str, List[str]]):
-    # local docker registry runs by HTTP, so we state it in regctl
-    run(["regctl", "registry", "set", "--tls", "disabled", conf.local_registry])
-    for image, versions in images.items():
-        for version in versions:
-            config = get_config(image, version)
-            localhost_tag = f"{conf.local_registry}/{image}:{version}"
-            tags = [docker_tag(image, tag) for tag in config.tags]
-            tags.append(docker_tag(image, version))
-            for tag in tags:
-                run(["regctl", "image", "copy", localhost_tag, tag], verbose=True)
 
 
 def docker_image(image: str) -> str:

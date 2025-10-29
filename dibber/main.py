@@ -4,21 +4,20 @@ import signal
 import sys
 from enum import Enum
 from multiprocessing import Pool
+from pathlib import Path
 from typing import Optional
 
 import click
 
 import dibber.utils as utils
 from dibber.images import (
-    build_image,
-    build_image_multiplatform,
+    build_and_upload_image,
+    create_manifest,
     docker_tag,
     find_images,
     scan_image,
     sort_images,
     update_scanner,
-    upload_tags,
-    upload_tags_from_local_registry,
 )
 from dibber.settings import conf
 from dibber.validation import validate
@@ -37,42 +36,47 @@ def init_pool(logger_, env):
     os.environ.update(env)
 
 
-def _build_images(pool, images, multiplatform, platform):
-    if multiplatform:
-        res = pool.starmap_async(
-            build_image_multiplatform,
-            [(image, version, ALL_PLATFORMS, False) for image, version in images],
-        )
-    else:
-        res = pool.starmap_async(
-            build_image,
-            [(image, version, False, platform) for image, version in images],
-        )
+def _build_images(pool, images, platform, contexts):
+    res = pool.starmap_async(
+        build_and_upload_image,
+        [(image, version, platform, contexts) for image, version in images],
+    )
 
     while True:
         try:
             # Have a timeout to be non-blocking for signals
-            res.get(0.25)
+            all_new_contexts = res.get(0.25)
+            new_contexts = []
+            for build_contexts in all_new_contexts:
+                new_contexts += build_contexts
+            return new_contexts
             break
         except multiprocessing.context.TimeoutError:
             pass
 
 
-def _build_all_images(
-    parallel: int, multiplatform: bool, platform: Optional[Platform] = None
-):
+def write_manifest_information(contexts):
+    manifest_data = Path(".") / "manifest_data.txt"
+    manifest_data.write_text("\n".join(contexts))
+
+
+def read_manifest_information():
+    manifest_data = Path(".") / "manifest_data.txt"
+    return manifest_data.read_text().splitlines()
+
+
+def _build_all_images(parallel: int, platform: Optional[Platform] = None):
     platform = platform.value if platform else None
     images = find_images()
     validate(images)
     sorted_images = sort_images(images)
+    contexts = []
 
     if parallel == 1:
         images = [img_conf.image for img_conf in sorted_images]
         for image, version in images:
-            if multiplatform:
-                build_image_multiplatform(image, version, ALL_PLATFORMS)
-            else:
-                build_image(image, version, platform=platform)
+            new_contexts = build_and_upload_image(image, version, platform, contexts)
+            contexts += new_contexts
     else:
         utils.logger.info(f"Building {len(sorted_images)} images in {parallel} threads")
         utils.logger.remove()
@@ -98,13 +102,17 @@ def _build_all_images(
                         prio=prio,
                         parallel=parallel,
                     )
-                    _build_images(pool, images, multiplatform, platform)
+                    new_contexts = _build_images(pool, images, platform, contexts)
+                    contexts += new_contexts
                 except KeyboardInterrupt:
                     utils.logger.error("Caught KeyboardInterrupt, terminating workers")
                     pool.terminate()
                     raise
 
             pool.close()
+
+    # Write the contexts for the multi-arch image stitching
+    write_manifest_information(contexts)
 
 
 @click.group(help="Manage docker images")
@@ -127,68 +135,21 @@ def cli():
     help="Platform to build for.",
 )
 def build(parallel: int, platform: Optional[Platform]):
-    _build_all_images(parallel, platform=platform, multiplatform=False)
+    _build_all_images(parallel, platform=platform)
 
 
-@cli.command(help="Build docker images for multiple platforms")
-@click.option(
-    "--parallel",
-    default=2,
-    type=int,
-    help="Number of parallel images to build.",
-    show_default=True,
-)
-def build_multiplatform(
-    parallel: int,
-):
-    _build_all_images(parallel, multiplatform=True)
+@cli.command(help="Combine manifests to a multi-arch image")
+def merge_manifests():
+    contexts = read_manifest_information()
+    image_contexts = {}
+    for context in contexts:
+        image, sha256 = context.split(" ")
+        if image not in image_contexts:
+            image_contexts[image] = []
+        image_contexts[image].append(sha256)
 
-
-@cli.command(help="Upload docker tags")
-@click.option(
-    "--parallel",
-    default=2,
-    type=int,
-    help="Number of parallel uploads.",
-    show_default=True,
-)
-def upload(parallel: int):
-    images = find_images()
-    validate(images)
-
-    print(conf.local_registry)
-
-    if conf.local_registry:
-        upload_tags_from_local_registry(images)
-    else:
-        utils.logger.info(f"Uploading {len(images)} images in {parallel} threads")
-        utils.logger.remove()
-        utils.logger.add(sys.stderr, enqueue=True, level="INFO")
-
-        original_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
-        with Pool(
-            parallel, initializer=init_pool, initargs=(utils.logger, os.environ.copy())
-        ) as pool:
-            signal.signal(signal.SIGINT, original_sigint_handler)
-
-            image_versions = []
-            for image, versions in images.items():
-                for version in versions:
-                    image_versions.append((image, version))
-
-            verbose = False
-            res = pool.starmap_async(
-                upload_tags,
-                [(image, version, verbose) for image, version in image_versions],
-            )
-
-            while True:
-                try:
-                    # Have a timeout to be non-blocking for signals
-                    res.get(3)
-                    break
-                except multiprocessing.context.TimeoutError:
-                    pass
+    for image in image_contexts:
+        create_manifest(image, image_contexts[image])
 
 
 @cli.command(help="Scan docker images")
