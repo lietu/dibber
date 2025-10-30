@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from os.path import basename
 from pathlib import Path
 from typing import Dict, List
@@ -113,14 +113,22 @@ def sort_images(images_: Dict[str, List[str]]) -> List[ImageConf]:
     return result
 
 
-def add_image_tag(image, uniq_id, tag):
-    tag_cmd = ["docker", "tag", f"{image}:{uniq_id}", f"{image}:{tag}"]
+def add_image_tag(image, uniq_id, tag, target_image=None):
+    if target_image is None:
+        target_image = image
+
+    tag_cmd = ["docker", "tag", f"{image}:{uniq_id}", f"{target_image}:{tag}"]
     run(tag_cmd)
 
 
-def remove_image_uniq_id(image, uniq_id):
-    untag_cmd = ["docker", "rmi", f"{image}:{uniq_id}"]
+def remove_image_tag(image, tag):
+    untag_cmd = ["docker", "rmi", f"{image}:{tag}"]
     run(untag_cmd)
+
+
+def push_image(image, tag):
+    push_cmd = ["docker", "push", f"{image}:{tag}"]
+    run(push_cmd)
 
 
 def get_build_contexts(contexts):
@@ -165,13 +173,9 @@ def create_manifest(image: str, digests: list[str]):
     )
 
 
-def build_and_upload_image(image: str, version: str, contexts: list[str] = []) -> str:
-    """
-    Build and upload image
-    :param image:
-    :param version:
-    :return: ["ghcr.io/user/image:docker_tag sha256:9df972...", ...]
-    """
+def build_and_upload_image(
+    image: str, version: str, contexts: list[str] = []
+) -> (str, str):
     start = time.perf_counter()
 
     # Need a temporary ID due to limitations of buildx
@@ -237,8 +241,13 @@ def build_and_upload_image(image: str, version: str, contexts: list[str] = []) -
 
         add_image_tag(image, uniq_id, extra_tag)
 
+    # Make sure we push the uniq ID tag to keep the image around
+    add_image_tag(image, uniq_id, uniq_id, repo)
+    push_image(repo, uniq_id)
+
     # Remove the now unnecessary unique ID
-    remove_image_uniq_id(image, uniq_id)
+    remove_image_tag(image, uniq_id)
+    remove_image_tag(repo, uniq_id)
 
     elapsed = time.perf_counter() - start
     logger.info(
@@ -247,24 +256,7 @@ def build_and_upload_image(image: str, version: str, contexts: list[str] = []) -
         elapsed=humanize.precisedelta(timedelta(seconds=elapsed)),
     )
 
-    return tag_map
-
-
-def upload_tags(image: str, version: str, verbose=True):
-    name = f"{image}/{version}"
-    logger.info("Uploading tags for {name}", name=name)
-
-    # --all-tags added in Docker 20.10.0
-    start = datetime.now()
-    run(["docker", "push", "--all-tags", docker_image(image)], verbose)
-    end = datetime.now()
-
-    if not verbose:
-        logger.info(
-            "Uploaded {name} in {elapsed}",
-            name=name,
-            elapsed=humanize.precisedelta(end - start),
-        )
+    return tag_map, f"{repo}:{uniq_id}"
 
 
 def docker_image(image: str) -> str:

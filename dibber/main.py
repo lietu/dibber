@@ -14,6 +14,7 @@ from dibber.images import (
     docker_tag,
     find_images,
     inspect_manifest,
+    remove_image_tag,
     scan_image,
     sort_images,
     update_scanner,
@@ -36,37 +37,51 @@ def _build_images(pool, images, contexts):
     while True:
         try:
             # Have a timeout to be non-blocking for signals
-            all_new_contexts = res.get(0.25)
+            results = res.get(0.25)
+            uniq_ids = []
             new_contexts = []
-            for build_contexts in all_new_contexts:
-                new_contexts += build_contexts
-            return new_contexts
+            for result in results:
+                new_contexts += result[0]
+                uniq_ids.append(result[1])
+            return new_contexts, uniq_ids
             break
         except multiprocessing.context.TimeoutError:
             pass
 
 
-def write_manifest_information(contexts):
+def write_manifest_information(contexts, uniq_ids):
     manifest_data = Path(".") / "manifest_data.txt"
     manifest_data.write_text("\n".join(contexts) + "\n")
+
+    uniq_id_data = Path(".") / "uniq_ids.txt"
+    uniq_id_data.write_text("\n".join(uniq_ids) + "\n")
 
 
 def read_manifest_information():
     manifest_data = Path(".") / "manifest_data.txt"
-    return [line for line in manifest_data.read_text().splitlines() if line != ""]
+    uniq_id_data = Path(".") / "uniq_ids.txt"
+
+    contexts = [line for line in manifest_data.read_text().splitlines() if line != ""]
+    uniq_ids = [line for line in uniq_id_data.read_text().splitlines() if line != ""]
+    return contexts, uniq_ids
 
 
 def _build_all_images(parallel: int):
     images = find_images()
     validate(images)
     sorted_images = sort_images(images)
+
     contexts = []
+    uniq_ids = []
 
     if parallel == 1:
         images = [img_conf.image for img_conf in sorted_images]
         for image, version in images:
-            new_contexts = build_and_upload_image(image, version, contexts)
+            new_contexts, new_uniq_ids = build_and_upload_image(
+                image, version, contexts
+            )
             contexts += new_contexts
+            uniq_ids += new_uniq_ids
     else:
         utils.logger.info(f"Building {len(sorted_images)} images in {parallel} threads")
         utils.logger.remove()
@@ -92,8 +107,9 @@ def _build_all_images(parallel: int):
                         prio=prio,
                         parallel=parallel,
                     )
-                    new_contexts = _build_images(pool, images, contexts)
+                    new_contexts, new_uniq_ids = _build_images(pool, images, contexts)
                     contexts += new_contexts
+                    uniq_ids += new_uniq_ids
                 except KeyboardInterrupt:
                     utils.logger.error("Caught KeyboardInterrupt, terminating workers")
                     pool.terminate()
@@ -102,7 +118,7 @@ def _build_all_images(parallel: int):
             pool.close()
 
     # Write the contexts for the multi-arch image stitching
-    write_manifest_information(contexts)
+    write_manifest_information(contexts, uniq_ids)
 
 
 @click.group(help="Manage docker images")
@@ -124,7 +140,7 @@ def build(parallel: int):
 
 @cli.command(help="Combine manifests to a multi-arch image")
 def merge_manifests():
-    contexts = read_manifest_information()
+    contexts, uniq_ids = read_manifest_information()
     image_contexts = {}
     for context in contexts:
         image, sha256 = context.split(" ")
@@ -135,6 +151,9 @@ def merge_manifests():
 
     for image in image_contexts:
         create_manifest(image, image_contexts[image])
+
+    for uniq_id in uniq_ids:
+        remove_image_tag(*uniq_id.split(":"))
 
 
 @cli.command(help="Scan docker images")
