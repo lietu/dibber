@@ -157,12 +157,9 @@ def create_manifest(image: str, digests: list[str]):
     start = time.perf_counter()
     base_image = image.split(":", maxsplit=1)[0]
 
-    cmd = ["docker", "manifest", "create", image]
+    cmd = ["docker", "buildx", "imagetools", "create", "-t", image]
     for digest in digests:
-        cmd += ["--amend", f"{base_image}@{digest}"]
-    run(cmd)
-
-    cmd = ["docker", "manifest", "push", image]
+        cmd += [f"{base_image}@{digest}"]
     run(cmd)
 
     elapsed = time.perf_counter() - start
@@ -173,8 +170,8 @@ def create_manifest(image: str, digests: list[str]):
     )
 
 
-def build_and_upload_image(
-    image: str, version: str, contexts: list[str] = []
+def build_image(
+    image: str, version: str, contexts: list[str] = [], upload=True
 ) -> (str, str):
     start = time.perf_counter()
 
@@ -185,17 +182,22 @@ def build_and_upload_image(
     name = f"{image}/{version}"
     repo = docker_image(image)
     tag = docker_tag(image, version)
+    local_tag = docker_tag(image, version, local=True)
     build_contexts = get_build_contexts(contexts)
 
     logger.info("Building {name}", name=name)
 
     # First build local image
-    cmd = ["docker", "buildx", "build", name]
-    cmd += ["-t", f"{image}:{uniq_id}"]
-    cmd += build_contexts
+    if upload:
+        cmd = ["docker", "buildx", "build", name]
+        cmd += ["-t", f"{image}:{uniq_id}"]
+        cmd += build_contexts
 
-    cmd += ["--output", "type=docker"]
-    cmd += ["--progress=plain"]
+        cmd += ["--output", "type=docker"]
+        cmd += ["--progress=plain"]
+    else:
+        cmd = ["docker", "build", name]
+        cmd += ["-t", local_tag]
 
     full_cmd = " ".join(cmd)
     output = full_cmd + os.linesep
@@ -203,17 +205,18 @@ def build_and_upload_image(
     output += os.linesep + os.linesep
 
     # Then push to registry, should be built already
-    cmd = ["docker", "buildx", "build", name]
-    cmd += ["-t", repo]
-    cmd += build_contexts
+    if upload:
+        cmd = ["docker", "buildx", "build", name]
+        cmd += ["-t", repo]
+        cmd += build_contexts
 
-    cmd += ["--progress=plain"]
-    cmd += ["--provenance=false"]
-    cmd += ["--output", "push-by-digest=true,type=image,push=true"]
+        cmd += ["--progress=plain"]
+        cmd += ["--provenance=false"]
+        cmd += ["--output", "push-by-digest=true,type=image,push=true"]
 
-    full_cmd = " ".join(cmd)
-    output += full_cmd + os.linesep
-    output += run(cmd)
+        full_cmd = " ".join(cmd)
+        output += full_cmd + os.linesep
+        output += run(cmd)
 
     write_log(tag, output)
 
@@ -233,21 +236,25 @@ def build_and_upload_image(
         raise Exception("Couldn't find sha256 tag in output")
 
     # Create tag map and additional local tags
-    tag_map = [f"{tag} {sha256}"]
-    add_image_tag(image, uniq_id, version)
-    for extra_tag in config.tags:
-        full_name = docker_tag(image, extra_tag)
-        tag_map += [f"{full_name} {sha256}"]
+    if upload:
+        tag_map = [f"{tag} {sha256}"]
+        add_image_tag(image, uniq_id, version)
+        for extra_tag in config.tags:
+            full_name = docker_tag(image, extra_tag)
+            tag_map += [f"{full_name} {sha256}"]
 
-        add_image_tag(image, uniq_id, extra_tag)
+            add_image_tag(image, uniq_id, extra_tag)
+    else:
+        tag_map = [f"{local_tag} {sha256}"]
 
     # Make sure we push the uniq ID tag to keep the image around
-    add_image_tag(image, uniq_id, uniq_id, repo)
-    push_image(repo, uniq_id)
+    if upload:
+        add_image_tag(image, uniq_id, uniq_id, repo)
+        push_image(repo, uniq_id)
 
-    # Remove the now unnecessary unique ID
-    remove_image_tag(image, uniq_id)
-    remove_image_tag(repo, uniq_id)
+        # Remove the now unnecessary unique ID
+        remove_image_tag(image, uniq_id)
+        remove_image_tag(repo, uniq_id)
 
     elapsed = time.perf_counter() - start
     logger.info(

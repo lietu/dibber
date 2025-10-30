@@ -9,7 +9,7 @@ import click
 
 import dibber.utils as utils
 from dibber.images import (
-    build_and_upload_image,
+    build_image,
     create_manifest,
     docker_tag,
     find_images,
@@ -28,10 +28,10 @@ def init_pool(logger_, env):
     os.environ.update(env)
 
 
-def _build_images(pool, images, contexts):
+def _build_images(pool, images, contexts, local_only):
     res = pool.starmap_async(
-        build_and_upload_image,
-        [(image, version, contexts) for image, version in images],
+        build_image,
+        [(image, version, contexts, local_only) for image, version in images],
     )
 
     while True:
@@ -66,7 +66,7 @@ def read_manifest_information():
     return contexts, uniq_ids
 
 
-def _build_all_images(parallel: int):
+def _build_all_images(parallel: int, local_only: bool = False):
     images = find_images()
     validate(images)
     sorted_images = sort_images(images)
@@ -77,8 +77,8 @@ def _build_all_images(parallel: int):
     if parallel == 1:
         images = [img_conf.image for img_conf in sorted_images]
         for image, version in images:
-            new_contexts, new_uniq_ids = build_and_upload_image(
-                image, version, contexts
+            new_contexts, new_uniq_ids = build_image(
+                image, version, contexts, local_only
             )
             contexts += new_contexts
             uniq_ids += new_uniq_ids
@@ -107,7 +107,9 @@ def _build_all_images(parallel: int):
                         prio=prio,
                         parallel=parallel,
                     )
-                    new_contexts, new_uniq_ids = _build_images(pool, images, contexts)
+                    new_contexts, new_uniq_ids = _build_images(
+                        pool, images, contexts, local_only
+                    )
                     contexts += new_contexts
                     uniq_ids += new_uniq_ids
                 except KeyboardInterrupt:
@@ -134,8 +136,15 @@ def cli():
     help="Number of parallel images to build.",
     show_default=True,
 )
-def build(parallel: int):
-    _build_all_images(parallel)
+@click.option(
+    "--local-only/--upload",
+    default=False,
+    type=bool,
+    help="Keep the images local and don't upload, for security scans.",
+    show_default=True,
+)
+def build(parallel: int, local_only: bool):
+    _build_all_images(parallel, local_only)
 
 
 @cli.command(help="Combine manifests to a multi-arch image")
