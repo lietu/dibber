@@ -171,7 +171,7 @@ def create_manifest(image: str, digests: list[str]):
 
 
 def build_image(
-    image: str, version: str, contexts: list[str] = [], upload=True
+    image: str, version: str, contexts: list[str] = [], local_only=True
 ) -> (str, str):
     start = time.perf_counter()
 
@@ -188,16 +188,16 @@ def build_image(
     logger.info("Building {name}", name=name)
 
     # First build local image
-    if upload:
+    if local_only:
+        cmd = ["docker", "build", name]
+        cmd += ["-t", local_tag]
+    else:
         cmd = ["docker", "buildx", "build", name]
         cmd += ["-t", f"{image}:{uniq_id}"]
         cmd += build_contexts
 
         cmd += ["--output", "type=docker"]
         cmd += ["--progress=plain"]
-    else:
-        cmd = ["docker", "build", name]
-        cmd += ["-t", local_tag]
 
     full_cmd = " ".join(cmd)
     output = full_cmd + os.linesep
@@ -205,7 +205,7 @@ def build_image(
     output += os.linesep + os.linesep
 
     # Then push to registry, should be built already
-    if upload:
+    if not local_only:
         cmd = ["docker", "buildx", "build", name]
         cmd += ["-t", repo]
         cmd += build_contexts
@@ -222,7 +222,7 @@ def build_image(
     # Find the sha256 tag for the image
     sha256 = ""
     for line in output.splitlines():
-        if " exporting manifest " in line:
+        if " exporting manifest " in line or " writing image " in line:
             for word in line.split(" "):
                 if word.startswith("sha256:"):
                     sha256 = word.strip()
@@ -235,7 +235,9 @@ def build_image(
         raise Exception("Couldn't find sha256 tag in output")
 
     # Create tag map and additional local tags
-    if upload:
+    if local_only:
+        tag_map = [f"{local_tag} {sha256}"]
+    else:
         tag_map = [f"{tag} {sha256}"]
         add_image_tag(image, uniq_id, version)
         for extra_tag in config.tags:
@@ -243,11 +245,9 @@ def build_image(
             tag_map += [f"{full_name} {sha256}"]
 
             add_image_tag(image, uniq_id, extra_tag)
-    else:
-        tag_map = [f"{local_tag} {sha256}"]
 
     # Make sure we push the uniq ID tag to keep the image around
-    if upload:
+    if not local_only:
         add_image_tag(image, uniq_id, uniq_id, repo)
         push_image(repo, uniq_id)
 
