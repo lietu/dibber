@@ -13,6 +13,7 @@ from dibber.images import (
     create_manifest,
     docker_tag,
     find_images,
+    inspect_manifest,
     scan_image,
     sort_images,
     update_scanner,
@@ -52,7 +53,7 @@ def write_manifest_information(contexts):
 
 def read_manifest_information():
     manifest_data = Path(".") / "manifest_data.txt"
-    return manifest_data.read_text().splitlines()
+    return [line for line in manifest_data.read_text().splitlines() if line != ""]
 
 
 def _build_all_images(parallel: int):
@@ -130,6 +131,7 @@ def merge_manifests():
         if image not in image_contexts:
             image_contexts[image] = []
         image_contexts[image].append(sha256)
+        inspect_manifest(image, sha256)
 
     for image in image_contexts:
         create_manifest(image, image_contexts[image])

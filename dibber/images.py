@@ -137,6 +137,14 @@ def get_build_contexts(contexts):
     return build_contexts
 
 
+def inspect_manifest(image: str, digest: str):
+    base_image = image.split(":", maxsplit=1)[0]
+
+    cmd = ["docker", "manifest", "inspect", f"{base_image}@{digest}"]
+    output = run(cmd)
+    print(output)
+
+
 def create_manifest(image: str, digests: list[str]):
     start = time.perf_counter()
     base_image = image.split(":", maxsplit=1)[0]
