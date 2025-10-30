@@ -182,7 +182,6 @@ def build_image(
     name = f"{image}/{version}"
     repo = docker_image(image)
     tag = docker_tag(image, version)
-    local_tag = docker_tag(image, version, local=True)
     build_contexts = get_build_contexts(contexts)
 
     logger.info("Building {name}", name=name)
@@ -190,7 +189,7 @@ def build_image(
     # First build local image
     if local_only:
         cmd = ["docker", "build", name]
-        cmd += ["-t", local_tag]
+        cmd += ["-t", tag]
     else:
         cmd = ["docker", "buildx", "build", name]
         cmd += ["-t", f"{image}:{uniq_id}"]
@@ -235,9 +234,8 @@ def build_image(
         raise Exception("Couldn't find sha256 tag in output")
 
     # Create tag map and additional local tags
-    if local_only:
-        tag_map = [f"{local_tag} {sha256}"]
-    else:
+    tag_map = [f"{tag} {sha256}"]
+    if not local_only:
         tag_map = [f"{tag} {sha256}"]
         add_image_tag(image, uniq_id, version)
         for extra_tag in config.tags:
@@ -246,8 +244,7 @@ def build_image(
 
             add_image_tag(image, uniq_id, extra_tag)
 
-    # Make sure we push the uniq ID tag to keep the image around
-    if not local_only:
+        # Make sure we push the uniq ID tag to keep the image around
         add_image_tag(image, uniq_id, uniq_id, repo)
         push_image(repo, uniq_id)
 
