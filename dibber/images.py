@@ -211,7 +211,6 @@ def build_image(
         cmd += build_contexts
 
         cmd += ["--progress=plain"]
-        cmd += ["--provenance=false"]
         cmd += ["--output", "push-by-digest=true,type=image,push=true"]
 
         full_cmd = " ".join(cmd)
