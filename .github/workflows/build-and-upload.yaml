@@ -8,8 +8,6 @@ on:
   push:
     tags:
       - "*"
-    branches:
-      - main
 
 env:
   DOCKER_BUILDKIT: 1
