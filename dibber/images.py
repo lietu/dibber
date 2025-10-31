@@ -242,7 +242,7 @@ def build_image(
     write_log(repo_with_tag, output)
 
     # Find the sha256 tag for the built image
-    sha256 = get_image_digest(repo_with_uniq_id)
+    sha256 = get_image_digest(repo_with_tag if local_only else repo_with_uniq_id)
 
     # Create tag map and additional local tags
     tag_map = [f"{repo_with_tag} {sha256}"]
