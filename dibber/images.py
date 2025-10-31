@@ -118,8 +118,8 @@ def add_image_tag(source_image_tag, destination_image_tag):
     run(tag_cmd)
 
 
-def remove_image_tag(image_tag):
-    untag_cmd = ["regctl", "tag", "rm", image_tag]
+def remove_local_image_tag(image_tag):
+    untag_cmd = ["docker", "rmi", image_tag]
     run(untag_cmd)
 
 
@@ -266,7 +266,7 @@ def build_image(
 
         # Remove the now unnecessary unique ID locally
         # The pushed unique ID will be removed after manifest merging
-        remove_image_tag(repo_with_uniq_id)
+        remove_local_image_tag(repo_with_uniq_id)
 
     elapsed = time.perf_counter() - start
     sha256_summary = sha256[:13] + "..." + sha256[-5:]
