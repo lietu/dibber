@@ -1,7 +1,7 @@
 import os
+import sys
 import time
 from datetime import timedelta
-from os.path import basename
 from pathlib import Path
 from typing import Dict, List
 
@@ -113,21 +113,18 @@ def sort_images(images_: Dict[str, List[str]]) -> List[ImageConf]:
     return result
 
 
-def add_image_tag(image, uniq_id, tag, target_image=None):
-    if target_image is None:
-        target_image = image
-
-    tag_cmd = ["docker", "tag", f"{image}:{uniq_id}", f"{target_image}:{tag}"]
+def add_image_tag(source_image_tag, destination_image_tag):
+    tag_cmd = ["docker", "tag", source_image_tag, destination_image_tag]
     run(tag_cmd)
 
 
-def remove_image_tag(image, tag):
-    untag_cmd = ["docker", "rmi", f"{image}:{tag}"]
+def remove_image_tag(image_tag):
+    untag_cmd = ["regctl", "tag", "rm", image_tag]
     run(untag_cmd)
 
 
-def push_image(image, tag):
-    push_cmd = ["docker", "push", f"{image}:{tag}"]
+def push_image(image_tag):
+    push_cmd = ["docker", "push", image_tag]
     run(push_cmd)
 
 
@@ -135,14 +132,25 @@ def get_build_contexts(contexts):
     build_contexts = []
 
     for context in contexts:
-        image, sha256 = context.split(" ", maxsplit=1)
-        base_image = basename(image)
+        local_tag, repo_uniq_id = context.split(" ", maxsplit=1)
         build_contexts += [
             "--build-context",
-            f"{base_image}=docker-image://{image}@{sha256}",
+            f"{local_tag}=docker-image://{repo_uniq_id}",
         ]
 
     return build_contexts
+
+
+def get_image_digest(image_tag) -> str:
+    cmd = ["docker", "buildx", "imagetools", "inspect", image_tag]
+    output = run(cmd)
+    for line in output.splitlines():
+        if line.startswith("Digest:"):
+            return line[len("Digest:") :].strip()
+
+    logger.error("Couldn't find sha256 digest for image")
+    logger.error(output)
+    sys.exit(1)
 
 
 def inspect_manifest(image: str, digest: str):
@@ -171,7 +179,11 @@ def create_manifest(image: str, digests: list[str]):
 
 
 def build_image(
-    image: str, version: str, contexts: list[str] = [], local_only=True
+    image: str,
+    version: str,
+    platform: str,
+    contexts: list[str] = [],
+    local_only=True,
 ) -> (str, str):
     start = time.perf_counter()
 
@@ -179,20 +191,26 @@ def build_image(
     uniq_id = make_id()
 
     config = get_config(image, version)
-    name = f"{image}/{version}"
-    repo = docker_image(image)
-    tag = docker_tag(image, version)
+    dockerfile_path = f"{image}/{version}"
+    repo_base = docker_image(image)
+    repo_with_tag = docker_tag(image, version)
+    repo_with_uniq_id = docker_tag(image, uniq_id)
+    local_name = image
+    local_with_tag = docker_tag(local_name, version, local=True)
+    local_with_uniq_id = docker_tag(local_name, uniq_id, local=True)
     build_contexts = get_build_contexts(contexts)
 
-    logger.info("Building {name}", name=name)
+    logger.info("Building {name}", name=dockerfile_path)
 
     # First build local image
     if local_only:
-        cmd = ["docker", "build", name]
-        cmd += ["-t", tag]
+        cmd = ["docker", "build", dockerfile_path]
+        cmd += ["-t", repo_with_tag]
+        cmd += ["--platform", platform]
     else:
-        cmd = ["docker", "buildx", "build", name]
-        cmd += ["-t", f"{image}:{uniq_id}"]
+        cmd = ["docker", "buildx", "build", dockerfile_path]
+        cmd += ["-t", local_with_uniq_id]
+        cmd += ["--platform", platform]
         cmd += build_contexts
 
         cmd += ["--output", "type=docker"]
@@ -205,8 +223,9 @@ def build_image(
 
     # Then push to registry, should be built already
     if not local_only:
-        cmd = ["docker", "buildx", "build", name]
-        cmd += ["-t", repo]
+        cmd = ["docker", "buildx", "build", dockerfile_path]
+        cmd += ["-t", repo_base]  # Can't push with tag using push-by-digest
+        cmd += ["--platform", platform]
         cmd += build_contexts
 
         cmd += ["--progress=plain"]
@@ -216,50 +235,51 @@ def build_image(
         output += full_cmd + os.linesep
         output += run(cmd)
 
-    write_log(tag, output)
+        # Also push the reference with uniq ID so this image is not lost
+        add_image_tag(local_with_uniq_id, repo_with_uniq_id)
+        push_image(repo_with_uniq_id)
 
-    # Find the sha256 tag for the image
-    sha256 = ""
-    for line in output.splitlines():
-        if " exporting manifest " in line or " writing image " in line:
-            for word in line.split(" "):
-                if word.startswith("sha256:"):
-                    sha256 = word.strip()
-                    break
-        if sha256 != "":
-            break
+    write_log(repo_with_tag, output)
 
-    if sha256 == "":
-        logger.error(output)
-        raise Exception("Couldn't find sha256 tag in output")
+    # Find the sha256 tag for the built image
+    sha256 = get_image_digest(repo_with_uniq_id)
 
     # Create tag map and additional local tags
-    tag_map = [f"{tag} {sha256}"]
-    if not local_only:
-        tag_map = [f"{tag} {sha256}"]
-        add_image_tag(image, uniq_id, version)
+    tag_map = [f"{repo_with_tag} {sha256}"]
+    if local_only:
+        # ghcr.io/lietu/ubuntu-base:24.04 -> ubuntu-base:24.04
+        add_image_tag(repo_with_tag, local_with_tag)
+    else:
+        # Add the proper target tags, for local and repo
+        add_image_tag(repo_with_uniq_id, repo_with_tag)
+        add_image_tag(repo_with_uniq_id, local_with_tag)
+
+        # Add any additional tags
         for extra_tag in config.tags:
-            full_name = docker_tag(image, extra_tag)
-            tag_map += [f"{full_name} {sha256}"]
+            extra_repo_tag = docker_tag(image, extra_tag)
+            extra_local_tag = docker_tag(image, extra_tag, local=True)
 
-            add_image_tag(image, uniq_id, extra_tag)
+            add_image_tag(repo_with_uniq_id, extra_repo_tag)
+            add_image_tag(repo_with_uniq_id, extra_local_tag)
 
-        # Make sure we push the uniq ID tag to keep the image around
-        add_image_tag(image, uniq_id, uniq_id, repo)
-        push_image(repo, uniq_id)
+            tag_map += [f"{extra_repo_tag} {sha256}"]
 
-        # Remove the now unnecessary unique ID
-        remove_image_tag(image, uniq_id)
-        remove_image_tag(repo, uniq_id)
+        # Remove the now unnecessary unique ID locally
+        # The pushed unique ID will be removed after manifest merging
+        remove_image_tag(repo_with_uniq_id)
 
     elapsed = time.perf_counter() - start
+    sha256_summary = sha256[:13] + "..." + sha256[-5:]
+
     logger.info(
-        "Built and uploaded {name} in {elapsed}",
-        name=name,
+        "Built and uploaded {name} as {repo_with_uniq_id} ({sha256}) in {elapsed}",
+        name=dockerfile_path,
+        repo_with_uniq_id=repo_with_uniq_id,
+        sha256=sha256_summary,
         elapsed=humanize.precisedelta(timedelta(seconds=elapsed)),
     )
 
-    return tag_map, f"{repo}:{uniq_id}"
+    return tag_map, f"{local_with_tag} {repo_with_uniq_id}", repo_with_uniq_id
 
 
 def docker_image(image: str) -> str:

@@ -1,9 +1,11 @@
 import multiprocessing.context
 import os
+import platform as platformlib
 import signal
 import sys
 from multiprocessing import Pool
 from pathlib import Path
+from typing import Optional
 
 import click
 
@@ -13,8 +15,6 @@ from dibber.images import (
     create_manifest,
     docker_tag,
     find_images,
-    inspect_manifest,
-    remove_image_tag,
     scan_image,
     sort_images,
     update_scanner,
@@ -28,10 +28,10 @@ def init_pool(logger_, env):
     os.environ.update(env)
 
 
-def _build_images(pool, images, contexts, local_only):
+def _build_images(pool, images, platform, contexts, local_only):
     res = pool.starmap_async(
         build_image,
-        [(image, version, contexts, local_only) for image, version in images],
+        [(image, version, platform, contexts, local_only) for image, version in images],
     )
 
     while True:
@@ -40,10 +40,12 @@ def _build_images(pool, images, contexts, local_only):
             results = res.get(0.25)
             uniq_ids = []
             new_contexts = []
+            new_tag_map = []
             for result in results:
-                new_contexts += result[0]
-                uniq_ids.append(result[1])
-            return new_contexts, uniq_ids
+                new_tag_map += result[0]
+                new_contexts.append(result[1])
+                uniq_ids.append(result[2])
+            return new_tag_map, new_contexts, uniq_ids
             break
         except multiprocessing.context.TimeoutError:
             pass
@@ -66,21 +68,23 @@ def read_manifest_information():
     return contexts, uniq_ids
 
 
-def _build_all_images(parallel: int, local_only: bool = False):
+def _build_all_images(parallel: int, platform: str, local_only: bool = False):
     images = find_images()
     validate(images)
     sorted_images = sort_images(images)
 
+    tag_maps = []
     contexts = []
     uniq_ids = []
 
     if parallel == 1:
         images = [img_conf.image for img_conf in sorted_images]
         for image, version in images:
-            new_contexts, new_uniq_ids = build_image(
-                image, version, contexts, local_only
+            new_tag_map, new_context, new_uniq_ids = build_image(
+                image, version, platform, contexts, local_only
             )
-            contexts += new_contexts
+            tag_maps += new_tag_map
+            contexts.append(new_context)
             uniq_ids += new_uniq_ids
     else:
         utils.logger.info(f"Building {len(sorted_images)} images in {parallel} threads")
@@ -107,9 +111,10 @@ def _build_all_images(parallel: int, local_only: bool = False):
                         prio=prio,
                         parallel=parallel,
                     )
-                    new_contexts, new_uniq_ids = _build_images(
-                        pool, images, contexts, local_only
+                    new_tag_map, new_contexts, new_uniq_ids = _build_images(
+                        pool, images, platform, contexts, local_only
                     )
+                    tag_maps += new_tag_map
                     contexts += new_contexts
                     uniq_ids += new_uniq_ids
                 except KeyboardInterrupt:
@@ -120,7 +125,7 @@ def _build_all_images(parallel: int, local_only: bool = False):
             pool.close()
 
     # Write the contexts for the multi-arch image stitching
-    write_manifest_information(contexts, uniq_ids)
+    write_manifest_information(tag_maps, uniq_ids)
 
 
 @click.group(help="Manage docker images")
@@ -137,14 +142,30 @@ def cli():
     show_default=True,
 )
 @click.option(
+    "--platform",
+    default=None,
+    type=str,
+    help="Name of the platform, linux/amd64, linux/arm64, windows/amd64, ...",
+    show_default=True,
+)
+@click.option(
     "--local-only/--upload",
     default=False,
     type=bool,
     help="Keep the images local and don't upload, for security scans.",
     show_default=True,
 )
-def build(parallel: int, local_only: bool):
-    _build_all_images(parallel, local_only)
+def build(parallel: int, platform: Optional[str] = None, local_only: bool = False):
+    if platform is None:
+        machine = platformlib.machine().lower()
+        os = platformlib.system().lower()
+        if machine == "x86_64":
+            machine = "amd64"
+        if machine == "aarch64":
+            machine = "arm64"
+        platform = f"{os}/{machine}"
+
+    _build_all_images(parallel, platform, local_only)
 
 
 @cli.command(help="Combine manifests to a multi-arch image")
@@ -156,13 +177,13 @@ def merge_manifests():
         if image not in image_contexts:
             image_contexts[image] = []
         image_contexts[image].append(sha256)
-        inspect_manifest(image, sha256)
 
     for image in image_contexts:
         create_manifest(image, image_contexts[image])
 
-    for uniq_id in uniq_ids:
-        remove_image_tag(*uniq_id.split(":"))
+    # TODO: Figure out how to delete these, the obvious methods don't seem to work at least with GHCR
+    # for uniq_id in uniq_ids:
+    #     remove_image_tag(uniq_id)
 
 
 @cli.command(help="Scan docker images")
