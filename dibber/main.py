@@ -42,9 +42,9 @@ def _build_images(pool, images, platform, contexts, local_only):
             new_contexts = []
             new_tag_map = []
             for result in results:
-                new_tag_map += result[0]
-                new_contexts.append(result[1])
-                uniq_ids.append(result[2])
+                new_tag_map += result.tag_map
+                new_contexts.append(result.contexts)
+                uniq_ids.append(result.uniq_id)
             return new_tag_map, new_contexts, uniq_ids
             break
         except multiprocessing.context.TimeoutError:
