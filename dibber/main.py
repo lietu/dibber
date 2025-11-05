@@ -42,9 +42,9 @@ def _build_images(pool, images, platform, contexts, local_only):
             new_contexts = []
             new_tag_map = []
             for result in results:
-                new_tag_map += result[0]
-                new_contexts.append(result[1])
-                uniq_ids.append(result[2])
+                new_tag_map += result.tag_map
+                new_contexts.append(result.contexts)
+                uniq_ids.append(result.uniq_id)
             return new_tag_map, new_contexts, uniq_ids
             break
         except multiprocessing.context.TimeoutError:
@@ -122,8 +122,6 @@ def _build_all_images(parallel: int, platform: str, local_only: bool = False):
                     pool.terminate()
                     raise
 
-            pool.close()
-
     # Write the contexts for the multi-arch image stitching
     write_manifest_information(tag_maps, uniq_ids)
 
@@ -163,6 +161,9 @@ def build(parallel: int, platform: Optional[str] = None, local_only: bool = Fals
             machine = "amd64"
         if machine == "aarch64":
             machine = "arm64"
+        if os == "darwin":
+            # On Mac we want to typically build linux containers
+            os = "linux"
         platform = f"{os}/{machine}"
 
     _build_all_images(parallel, platform, local_only)

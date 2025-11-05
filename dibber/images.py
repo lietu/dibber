@@ -3,7 +3,7 @@ import sys
 import time
 from datetime import timedelta
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, NamedTuple
 
 import humanize
 from loguru import logger
@@ -178,13 +178,19 @@ def create_manifest(image: str, digests: list[str]):
     )
 
 
+class BuildResults(NamedTuple):
+    tag_map: list[str]
+    contexts: str
+    uniq_id: str
+
+
 def build_image(
     image: str,
     version: str,
     platform: str,
     contexts: list[str] = [],
     local_only=True,
-) -> (str, str):
+) -> BuildResults:
     start = time.perf_counter()
 
     # Need a temporary ID due to limitations of buildx
@@ -271,15 +277,26 @@ def build_image(
     elapsed = time.perf_counter() - start
     sha256_summary = sha256[:13] + "..." + sha256[-5:]
 
-    logger.info(
-        "Built and uploaded {name} as {repo_with_uniq_id} ({sha256}) in {elapsed}",
-        name=dockerfile_path,
-        repo_with_uniq_id=repo_with_uniq_id,
-        sha256=sha256_summary,
-        elapsed=humanize.precisedelta(timedelta(seconds=elapsed)),
-    )
+    if local_only:
+        logger.info(
+            "Built {name} as {local_with_tag} ({sha256}) in {elapsed}",
+            name=dockerfile_path,
+            local_with_tag=local_with_tag,
+            sha256=sha256_summary,
+            elapsed=humanize.precisedelta(timedelta(seconds=elapsed)),
+        )
+    else:
+        logger.info(
+            "Built and uploaded {name} as {repo_with_uniq_id} ({sha256}) in {elapsed}",
+            name=dockerfile_path,
+            repo_with_uniq_id=repo_with_uniq_id,
+            sha256=sha256_summary,
+            elapsed=humanize.precisedelta(timedelta(seconds=elapsed)),
+        )
 
-    return tag_map, f"{local_with_tag} {repo_with_uniq_id}", repo_with_uniq_id
+    return BuildResults(
+        tag_map, f"{local_with_tag} {repo_with_uniq_id}", repo_with_uniq_id
+    )
 
 
 def docker_image(image: str) -> str:
