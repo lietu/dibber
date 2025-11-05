@@ -122,8 +122,6 @@ def _build_all_images(parallel: int, platform: str, local_only: bool = False):
                     pool.terminate()
                     raise
 
-            pool.close()
-
     # Write the contexts for the multi-arch image stitching
     write_manifest_information(tag_maps, uniq_ids)
 
