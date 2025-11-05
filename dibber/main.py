@@ -161,6 +161,9 @@ def build(parallel: int, platform: Optional[str] = None, local_only: bool = Fals
             machine = "amd64"
         if machine == "aarch64":
             machine = "arm64"
+        if os == "darwin":
+            # On Mac we want to typically build linux containers
+            os = "linux"
         platform = f"{os}/{machine}"
 
     _build_all_images(parallel, platform, local_only)
