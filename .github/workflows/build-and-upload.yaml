@@ -2,9 +2,6 @@ name: Build and upload to PyPI
 
 on:
   workflow_dispatch:
-  schedule:
-    # First day of every month, you know, for automatic updates etc.
-    - cron: "0 0 1 * *"
   push:
     tags:
       - "*"
